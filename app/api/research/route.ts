@@ -3,7 +3,7 @@ import { researchAIEvents } from '@/lib/gemini';
 import { initDB, saveEvents } from '@/lib/db';
 import { LogEntry, ResearchQuery } from '@/lib/types';
 
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 export async function POST(req: NextRequest) {
   const query: ResearchQuery = await req.json();
@@ -20,28 +20,42 @@ export async function POST(req: NextRequest) {
   const writer = stream.writable.getWriter();
 
   const send = async (data: object) => {
-    await writer.write(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
+    try {
+      await writer.write(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
+    } catch { /* client disconnected */ }
   };
 
   (async () => {
     try {
       await initDB();
 
-      const logs: LogEntry[] = [];
-
-      const events = await researchAIEvents(query, async (entry) => {
-        logs.push(entry);
+      const events = await researchAIEvents(query, async (entry: LogEntry) => {
         await send({ type: 'log', entry });
       });
 
-      await send({ type: 'log', entry: { timestamp: new Date().toISOString(), level: 'STORED', message: `Persisting ${events.length} events to intelligence database...` } });
+      await send({
+        type: 'log',
+        entry: {
+          timestamp: new Date().toISOString(),
+          level: 'STORED',
+          message: `Persisting ${events.length} unique events to intelligence database...`,
+        },
+      });
 
       const eventsWithArea = events.map(e => ({ ...e, search_area: query.location }));
       const saved = await saveEvents(eventsWithArea);
 
       await send({
+        type: 'log',
+        entry: {
+          timestamp: new Date().toISOString(),
+          level: 'COMPLETE',
+          message: `Mission complete — ${events.length} found, ${saved.length} new records stored`,
+        },
+      });
+
+      await send({
         type: 'complete',
-        events: saved,
         totalFound: events.length,
         totalSaved: saved.length,
       });
